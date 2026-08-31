@@ -95,7 +95,7 @@ def trigger_sync(db: DB):
         return {"synchronized": SyncService(db, client()).run()}
     except EventsProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
-    except SyncAlreadyRunningError as exc:
+    except SyncAlreadyRunningError:
         return {"synchronized": 0, "status": "running"}
 
 
