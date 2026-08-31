@@ -37,8 +37,14 @@ class EventsProviderClient:
         data = response.json()
         return data if isinstance(data, dict) else {"results": data}
 
-    def events(self, changed_at: str) -> dict[str, Any]:
-        return self._request("GET", "api/events/", params={"changed_at": changed_at})
+    def events(
+        self, changed_at: str, page_url: Optional[str] = None
+    ) -> dict[str, Any]:
+        if page_url:
+            return self._request("GET", page_url)
+        return self._request(
+            "GET", "api/events/", params={"changed_at": changed_at}
+        )
 
     def seats(self, event_id: str) -> list[str]:
         data = self._request("GET", f"api/events/{event_id}/seats/")
@@ -79,8 +85,10 @@ class EventsPaginator:
         self.changed_at = changed_at
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
-        next_url: Optional[str] = f"api/events/?changed_at={self.changed_at}"
-        while next_url:
-            page = self.client._request("GET", next_url)
+        next_url: Optional[str] = None
+        while True:
+            page = self.client.events(self.changed_at, next_url)
             yield from page.get("results", [])
             next_url = page.get("next")
+            if not next_url:
+                break

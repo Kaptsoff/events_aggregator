@@ -1,8 +1,9 @@
 import logging
+import threading
 from datetime import date, datetime, time, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import Event, Place
@@ -10,6 +11,17 @@ from .provider import EventsPaginator, EventsProviderClient
 from .repositories import EventRepository, SyncRepository, TicketRepository
 
 logger = logging.getLogger(__name__)
+_sync_lock = threading.Lock()
+
+
+class SyncAlreadyRunningError(RuntimeError):
+    pass
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class SyncService:
@@ -18,18 +30,26 @@ class SyncService:
         self.client = client
 
     def run(self) -> int:
+        if not _sync_lock.acquire(blocking=False):
+            raise SyncAlreadyRunningError("Synchronization is already running")
+        try:
+            return self._run_locked()
+        finally:
+            _sync_lock.release()
+
+    def _run_locked(self) -> int:
         sync = SyncRepository(self.db).state()
         changed_at = sync.last_changed_at.date().isoformat()
         sync.sync_status = "running"
         self.db.commit()
         count = 0
-        newest = sync.last_changed_at
+        newest = _utc(sync.last_changed_at)
         try:
             for payload in EventsPaginator(self.client, changed_at):
                 EventRepository(self.db).upsert(payload)
                 changed = payload.get("changed_at") or payload.get("created_at")
                 if changed:
-                    newest = max(newest, datetime.fromisoformat(changed))
+                    newest = max(newest, _utc(datetime.fromisoformat(changed)))
                 count += 1
             sync.last_changed_at = newest
             sync.last_sync_time = datetime.now(timezone.utc)
@@ -39,7 +59,9 @@ class SyncService:
             return count
         except Exception:
             self.db.rollback()
+            sync = SyncRepository(self.db).state()
             sync.sync_status = "error"
+            sync.last_sync_time = datetime.now(timezone.utc)
             self.db.commit()
             logger.exception("Event synchronization failed")
             raise
@@ -83,10 +105,10 @@ def list_events(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    count_query = select(Event.id)
+    count_query = select(func.count()).select_from(Event)
     if date_from:
         count_query = count_query.where(Event.event_time >= start)
-    count = len(db.execute(count_query).all())
+    count = db.scalar(count_query) or 0
     return count, [event_payload_from_row(event, place) for event, place in rows]
 
 
@@ -129,9 +151,8 @@ class TicketService:
         event, _ = row
         if event.status != "published":
             raise ValueError("Event is not published")
-        if event.registration_deadline and (
-            datetime.now(timezone.utc) > event.registration_deadline
-        ):
+        deadline = event.registration_deadline
+        if deadline and datetime.now(timezone.utc) > _utc(deadline):
             raise ValueError("Registration deadline has passed")
         if seat not in self.client.seats(event_id):
             raise ValueError("Seat is not available")

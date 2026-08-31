@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from typing import Annotated, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -13,7 +13,13 @@ from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .provider import EventsProviderClient, EventsProviderError
 from .repositories import TicketRepository
-from .services import SyncService, TicketService, event_payload, list_events
+from .services import (
+    SyncAlreadyRunningError,
+    SyncService,
+    TicketService,
+    event_payload,
+    list_events,
+)
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
@@ -33,7 +39,7 @@ async def worker() -> None:
         if settings.events_provider_api_key:
             try:
                 with SessionLocal() as db:
-                    SyncService(db, client()).run()
+                    await asyncio.to_thread(SyncService(db, client()).run)
             except Exception:
                 logging.exception("Scheduled synchronization failed")
         await asyncio.sleep(settings.sync_interval_seconds)
@@ -74,28 +80,33 @@ def trigger_sync(db: DB):
         return {"synchronized": SyncService(db, client()).run()}
     except EventsProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
+    except SyncAlreadyRunningError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.get("/api/events")
 def events(
+    request: Request,
     db: DB,
     date_from: Optional[date] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
     count, results = list_events(db, date_from, page, page_size)
+    next_url = None
+    previous_url = None
+    if page * page_size < count:
+        next_url = str(
+            request.url.include_query_params(page=page + 1, page_size=page_size)
+        )
+    if page > 1:
+        previous_url = str(
+            request.url.include_query_params(page=page - 1, page_size=page_size)
+        )
     return {
         "count": count,
-        "next": (
-            f"/api/events?page={page + 1}&page_size={page_size}"
-            if page * page_size < count
-            else None
-        ),
-        "previous": (
-            f"/api/events?page={page - 1}&page_size={page_size}"
-            if page > 1
-            else None
-        ),
+        "next": next_url,
+        "previous": previous_url,
         "results": results,
     }
 

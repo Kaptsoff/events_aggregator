@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -22,7 +22,7 @@ class Event(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     name: Mapped[str] = mapped_column(Text)
-    place_id: Mapped[str] = mapped_column(String(64))
+    place_id: Mapped[str] = mapped_column(ForeignKey("places.id"), index=True)
     event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     registration_deadline: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True)
@@ -36,7 +36,9 @@ class Ticket(Base):
     __tablename__ = "tickets"
 
     ticket_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    event_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("events.id"), index=True
+    )
     first_name: Mapped[str] = mapped_column(String(255))
     last_name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str] = mapped_column(String(320))

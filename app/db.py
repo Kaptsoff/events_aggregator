@@ -12,6 +12,8 @@ class Base(DeclarativeBase):
 
 def _engine():
     url = get_settings().database_url
+    if url.startswith("postgres://"):
+        url = "postgresql+psycopg://" + url.removeprefix("postgres://")
     kwargs = (
         {"connect_args": {"check_same_thread": False}}
         if url.startswith("sqlite")
