@@ -36,13 +36,14 @@ def client() -> EventsProviderClient:
 
 async def worker() -> None:
     while True:
+        # Manual trigger should be available immediately after deployment.
+        await asyncio.sleep(settings.sync_interval_seconds)
         if settings.events_provider_api_key:
             try:
                 with SessionLocal() as db:
                     await asyncio.to_thread(SyncService(db, client()).run)
             except Exception:
                 logging.exception("Scheduled synchronization failed")
-        await asyncio.sleep(settings.sync_interval_seconds)
 
 
 @asynccontextmanager

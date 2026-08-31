@@ -41,6 +41,8 @@ class EventsProviderClient:
         self, changed_at: str, page_url: Optional[str] = None
     ) -> dict[str, Any]:
         if page_url:
+            # The provider may return insecure pagination links; keep API calls on TLS.
+            page_url = page_url.replace("http://", "https://", 1)
             return self._request("GET", page_url)
         return self._request(
             "GET", "api/events/", params={"changed_at": changed_at}
