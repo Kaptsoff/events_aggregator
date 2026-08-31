@@ -20,6 +20,8 @@ class EventRepository:
                 name=place_data.get("name", ""),
             )
             self.db.add(place)
+            # Ensure the FK target exists before events are flushed in bulk.
+            self.db.flush()
         for key in ("name", "city", "address", "seats_pattern"):
             if key in place_data:
                 setattr(place, key, place_data[key] or "")
