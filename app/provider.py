@@ -1,3 +1,4 @@
+import time
 from collections.abc import Iterator
 from typing import Any, Optional
 from urllib.parse import urljoin
@@ -22,18 +23,27 @@ class EventsProviderClient:
             if path.startswith("http")
             else urljoin(self.base_url, path.lstrip("/"))
         )
-        try:
-            response = httpx.request(
-                method,
-                url,
-                headers=headers,
-                timeout=self.timeout,
-                follow_redirects=True,
-                **kwargs,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise EventsProviderError(str(exc)) from exc
+        last_error: Optional[httpx.HTTPError] = None
+        for attempt in range(3):
+            try:
+                response = httpx.request(
+                    method,
+                    url,
+                    headers=headers,
+                    timeout=self.timeout,
+                    follow_redirects=True,
+                    **kwargs,
+                )
+                response.raise_for_status()
+                break
+            except (httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+            except httpx.HTTPError as exc:
+                raise EventsProviderError(str(exc)) from exc
+        else:
+            raise EventsProviderError(str(last_error)) from last_error
         data = response.json()
         return data if isinstance(data, dict) else {"results": data}
 
