@@ -6,6 +6,9 @@ from datetime import date
 from typing import Annotated, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -62,6 +65,17 @@ app = FastAPI(title="Events Aggregator", lifespan=lifespan)
 DB = Annotated[Session, Depends(get_db)]
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    if request.url.path == "/api/tickets":
+        return JSONResponse(
+            status_code=400, content={"detail": jsonable_encoder(exc.errors())}
+        )
+    return JSONResponse(
+        status_code=422, content={"detail": jsonable_encoder(exc.errors())}
+    )
+
+
 class TicketRequest(BaseModel):
     event_id: str
     first_name: str = Field(min_length=1)
@@ -82,7 +96,7 @@ def trigger_sync(db: DB):
     except EventsProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
     except SyncAlreadyRunningError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        return {"synchronized": 0, "status": "running"}
 
 
 @app.get("/api/events")
