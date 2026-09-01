@@ -1,6 +1,7 @@
+import asyncio
 from datetime import datetime, timezone
 
-from fastapi.testclient import TestClient
+import httpx
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -40,15 +41,22 @@ def test_health_and_paginated_events_preserve_filter():
 
     app.dependency_overrides[get_db] = override_db
     try:
-        client = TestClient(app)
-        assert client.get("/api/health").json() == {"status": "ok"}
-        response = client.get(
-            "/api/events",
-            params={"date_from": "2026-09-10", "page_size": 1},
-        )
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["count"] == 2
-        assert "date_from=2026-09-10" in payload["next"]
+        async def run() -> None:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as client:
+                assert (await client.get("/api/health")).json() == {"status": "ok"}
+                response = await client.get(
+                    "/api/events",
+                    params={"date_from": "2026-09-10", "page_size": 1},
+                )
+                assert response.status_code == 200
+                payload = response.json()
+                assert payload["count"] == 2
+                assert "date_from=2026-09-10" in payload["next"]
+
+        asyncio.run(run())
     finally:
         app.dependency_overrides.clear()
