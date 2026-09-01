@@ -1,7 +1,8 @@
 import logging
 import threading
 import time
-from datetime import date, datetime, time as datetime_time, timezone
+from datetime import date, datetime, timezone
+from datetime import time as datetime_time
 from typing import Optional
 
 from sqlalchemy import func, select
