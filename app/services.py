@@ -1,20 +1,43 @@
 import logging
 import threading
-from datetime import date, datetime, time, timezone
+import time
+from datetime import date, datetime, time as datetime_time, timezone
 from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .enums import EventStatus, SyncStatus
 from .models import Event, Place
 from .provider import EventsPaginator, EventsProviderClient
 from .repositories import EventRepository, SyncRepository, TicketRepository
 
 logger = logging.getLogger(__name__)
 _sync_lock = threading.Lock()
+_seats_cache: dict[str, tuple[float, list[str]]] = {}
 
 
 class SyncAlreadyRunningError(RuntimeError):
+    pass
+
+
+class EventNotFound(LookupError):
+    pass
+
+
+class TicketNotFound(LookupError):
+    pass
+
+
+class EventNotPublished(ValueError):
+    pass
+
+
+class RegistrationDeadlinePassed(ValueError):
+    pass
+
+
+class SeatNotAvailable(ValueError):
     pass
 
 
@@ -40,7 +63,7 @@ class SyncService:
     def _run_locked(self) -> int:
         sync = SyncRepository(self.db).state()
         changed_at = sync.last_changed_at.date().isoformat()
-        sync.sync_status = "running"
+        sync.sync_status = SyncStatus.RUNNING.value
         self.db.commit()
         count = 0
         newest = _utc(sync.last_changed_at)
@@ -53,14 +76,14 @@ class SyncService:
                 count += 1
             sync.last_changed_at = newest
             sync.last_sync_time = datetime.now(timezone.utc)
-            sync.sync_status = "success"
+            sync.sync_status = SyncStatus.SUCCESS.value
             self.db.commit()
             logger.info("Synchronized %s events", count)
             return count
         except Exception:
             self.db.rollback()
             sync = SyncRepository(self.db).state()
-            sync.sync_status = "error"
+            sync.sync_status = SyncStatus.ERROR.value
             sync.last_sync_time = datetime.now(timezone.utc)
             self.db.commit()
             logger.exception("Event synchronization failed")
@@ -98,7 +121,7 @@ def list_events(
 ) -> tuple[int, list[dict]]:
     query = select(Event, Place).join(Place, Event.place_id == Place.id)
     if date_from:
-        start = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+        start = datetime.combine(date_from, datetime_time.min, tzinfo=timezone.utc)
         query = query.where(Event.event_time >= start)
     rows = db.execute(
         query.order_by(Event.event_time)
@@ -147,15 +170,15 @@ class TicketService:
     ):
         row = EventRepository(self.db).get(event_id)
         if not row:
-            raise LookupError("Event not found")
+            raise EventNotFound("Event not found")
         event, _ = row
-        if event.status != "published":
-            raise ValueError("Event is not published")
+        if event.status != EventStatus.PUBLISHED:
+            raise EventNotPublished("Event is not published")
         deadline = event.registration_deadline
         if deadline and datetime.now(timezone.utc) > _utc(deadline):
-            raise ValueError("Registration deadline has passed")
+            raise RegistrationDeadlinePassed("Registration deadline has passed")
         if seat not in self.client.seats(event_id):
-            raise ValueError("Seat is not available")
+            raise SeatNotAvailable("Seat is not available")
         ticket_id = self.client.register(event_id, first_name, last_name, email, seat)
         return TicketRepository(self.db).create(
             ticket_id=ticket_id,
@@ -165,3 +188,28 @@ class TicketService:
             email=email,
             seat=seat,
         )
+
+    def cancel(self, ticket_id: str) -> bool:
+        repository = TicketRepository(self.db)
+        ticket = repository.get(ticket_id)
+        if ticket is None:
+            raise TicketNotFound("Ticket not found")
+        self.client.unregister(ticket.event_id, ticket.ticket_id)
+        repository.delete(ticket)
+        return True
+
+
+class SeatsService:
+    def __init__(self, db: Session, client: EventsProviderClient):
+        self.db, self.client = db, client
+
+    def get(self, event_id: str) -> list[str]:
+        if EventRepository(self.db).get(event_id) is None:
+            raise EventNotFound("Event not found")
+        now = time.monotonic()
+        cached = _seats_cache.get(event_id)
+        if cached and now - cached[0] < 30:
+            return cached[1]
+        values = self.client.seats(event_id)
+        _seats_cache[event_id] = (now, values)
+        return values

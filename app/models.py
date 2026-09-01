@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
+from .enums import EventStatus, SyncStatus
 
 
 class Place(Base):
@@ -27,7 +28,9 @@ class Event(Base):
     registration_deadline: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True)
     )
-    status: Mapped[str] = mapped_column(String(32), default="new")
+    status: Mapped[EventStatus] = mapped_column(
+        String(32), default=EventStatus.NEW.value
+    )
     number_of_visitors: Mapped[int] = mapped_column(Integer, default=0)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -56,4 +59,6 @@ class SyncMetadata(Base):
         DateTime(timezone=True),
         default=lambda: datetime(2000, 1, 1, tzinfo=timezone.utc),
     )
-    sync_status: Mapped[str] = mapped_column(String(32), default="never")
+    sync_status: Mapped[SyncStatus] = mapped_column(
+        String(32), default=SyncStatus.NEVER.value
+    )

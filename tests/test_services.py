@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
-from app.models import Event, Place, SyncMetadata
+from app.models import Event, Place, SyncMetadata, Ticket
 from app.provider import EventsProviderClient
-from app.services import SyncService, TicketService, list_events
+from app.services import SeatsService, SyncService, TicketService, list_events
 
 
 @pytest.fixture
@@ -93,3 +93,59 @@ def test_ticket_service_validates_and_persists_ticket(db):
 
     assert ticket.ticket_id == "ticket-1"
     client.register.assert_called_once()
+
+
+def test_seats_service_caches_provider_result(db):
+    db.add(Place(id="place-1", name="Main Hall"))
+    db.add(
+        Event(
+            id="event-1",
+            name="Python Conference",
+            place_id="place-1",
+            event_time=datetime.now(timezone.utc) + timedelta(days=2),
+            registration_deadline=None,
+            status="published",
+            number_of_visitors=0,
+            changed_at=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    client = Mock(spec=EventsProviderClient)
+    client.seats.return_value = ["A1"]
+
+    service = SeatsService(db, client)
+    assert service.get("event-1") == ["A1"]
+    assert service.get("event-1") == ["A1"]
+    client.seats.assert_called_once_with("event-1")
+
+
+def test_ticket_service_cancels_ticket(db):
+    db.add(Place(id="place-1", name="Main Hall"))
+    db.add(
+        Event(
+            id="event-1",
+            name="Python Conference",
+            place_id="place-1",
+            event_time=datetime.now(timezone.utc) + timedelta(days=2),
+            registration_deadline=None,
+            status="published",
+            number_of_visitors=0,
+            changed_at=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    db.add(
+        Ticket(
+            ticket_id="ticket-1",
+            event_id="event-1",
+            first_name="Ivan",
+            last_name="Ivanov",
+            email="ivan@example.com",
+            seat="A1",
+        )
+    )
+    db.commit()
+    client = Mock(spec=EventsProviderClient)
+
+    assert TicketService(db, client).cancel("ticket-1") is True
+    client.unregister.assert_called_once_with("event-1", "ticket-1")

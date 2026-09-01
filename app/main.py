@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Annotated, Optional
@@ -15,10 +14,12 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .provider import EventsProviderClient, EventsProviderError
-from .repositories import TicketRepository
 from .services import (
+    EventNotFound,
+    SeatsService,
     SyncAlreadyRunningError,
     SyncService,
+    TicketNotFound,
     TicketService,
     event_payload,
     list_events,
@@ -26,7 +27,6 @@ from .services import (
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
-seats_cache: dict[str, tuple[float, list[str]]] = {}
 
 
 def client() -> EventsProviderClient:
@@ -136,17 +136,12 @@ def event(event_id: str, db: DB):
 
 @app.get("/api/events/{event_id}/seats")
 def seats(event_id: str, db: DB):
-    if event_payload(db, event_id) is None:
-        raise HTTPException(404, "Event not found")
-    now = time.monotonic()
-    cached = seats_cache.get(event_id)
-    if cached and now - cached[0] < 30:
-        return {"event_id": event_id, "available_seats": cached[1]}
     try:
-        values = client().seats(event_id)
+        values = SeatsService(db, client()).get(event_id)
+    except EventNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
     except EventsProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
-    seats_cache[event_id] = (now, values)
     return {"event_id": event_id, "available_seats": values}
 
 
@@ -165,13 +160,10 @@ def create_ticket(request: TicketRequest, db: DB):
 
 @app.delete("/api/tickets/{ticket_id}")
 def cancel_ticket(ticket_id: str, db: DB):
-    repo = TicketRepository(db)
-    ticket = repo.get(ticket_id)
-    if ticket is None:
-        raise HTTPException(404, "Ticket not found")
     try:
-        client().unregister(ticket.event_id, ticket.ticket_id)
+        TicketService(db, client()).cancel(ticket_id)
+    except TicketNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
     except EventsProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
-    repo.delete(ticket)
     return {"success": True}
